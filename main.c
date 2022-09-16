@@ -218,11 +218,18 @@ int main(int argc, char **argv) {
     }
 
     // enable multicast for designated interface
+#ifdef _WIN32
+    struct ip_mreq iface = {
+        .imr_multiaddr.s_addr = args.addr.s_addr,
+        .imr_interface = htonl(args.ifindex),
+    };
+#else
     struct ip_mreqn iface = {
         .imr_multiaddr.s_addr = args.addr.s_addr,
         // .imr_ifindex has high priority than .imr_address
         .imr_ifindex = args.ifindex,
     };
+#endif
     err = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &iface, sizeof(iface));
     if (err < 0) {
         err = errno;
