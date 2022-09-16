@@ -5,15 +5,15 @@
 #include <errno.h>
 #include <getopt.h>
 
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <net/if.h>
-#include <sys/socket.h>
-#include <signal.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 
 #define MULTICAST_PORT 8101
 #define RCV_BUF_SIZE (64 << 10)
+
+extern int get_ifindex(char *);
 
 struct args {
     struct in_addr addr;    // multicast group
@@ -52,59 +52,8 @@ static void parse_args(int argc, char **argv, struct args *args) {
             break;
         }
         case 'i': {
-            struct in_addr in_addr;
-            if (inet_aton(optarg, &in_addr) != 0) {
-                // get interface index by addr
-                struct ifaddrs *ifaddrs;
-                int err = getifaddrs(&ifaddrs);
-                if (err < 0) {
-                    err = errno;
-                    fprintf(stderr, "failed to get interface address: %s\n", strerror(err));
-                    exit(1);
-                }
+            args->ifindex = get_ifindex(optarg);
 
-                char *ifa_name = NULL;
-                for (struct ifaddrs *ifa = ifaddrs; ifa != NULL; ifa = ifa->ifa_next) {
-                    if (ifa->ifa_addr == NULL) {
-                        continue;
-                    }
-                    if (ifa->ifa_addr->sa_family != AF_INET) {
-                        continue;
-                    }
-                    struct sockaddr_in *sock_addr = (struct sockaddr_in *)ifa->ifa_addr;
-                    if (sock_addr->sin_addr.s_addr != in_addr.s_addr) {
-                        continue;
-                    }
-
-                    ifa_name = ifa->ifa_name;
-                    break;
-                }
-
-                if (ifa_name == NULL) {
-                    fprintf(stderr, "interface address not found\n");
-                    exit(1);
-                }
-
-                unsigned idx = if_nametoindex(ifa_name);
-                if (idx == 0) {
-                    err = errno;
-                    fprintf(stderr, "failed to get interface index: %s\n", strerror(err));
-                    exit(1);
-                }
-
-                args->ifindex = idx;
-
-                freeifaddrs(ifaddrs);
-            } else {
-                unsigned idx;
-                if ((idx = if_nametoindex(optarg)) == 0) {
-                    int err = errno;
-                    fprintf(stderr, "interface not found: %s\n", strerror(err));
-                    exit(1);
-                }
-
-                args->ifindex = idx;
-            }
             break;
         }
         case OPT_SERVER: {

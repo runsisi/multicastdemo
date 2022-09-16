@@ -3,8 +3,12 @@ project(multicast C)
 
 set(CMAKE_C_STANDARD 99)
 
-if (CMAKE_SYSTEM_NAME MATCHES "CYGWIN")
-    add_compile_definitions(_WIN32)
-endif()
-
 add_executable(multicast main.c)
+
+if (CMAKE_SYSTEM_NAME MATCHES "CYGWIN")
+    target_compile_definitions(multicast PUBLIC _WIN32)
+    target_sources(multicast PRIVATE win.c)
+    target_link_libraries(multicast PRIVATE iphlpapi)
+else()
+    target_sources(multicast PRIVATE linux.c)
+endif()
