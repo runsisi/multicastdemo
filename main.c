@@ -23,6 +23,18 @@ struct args {
     int client;
 };
 
+static void usage() {
+    const char *usage_text =
+            "UDP multicast demo.\n\n"
+            "%s options address\n\n"
+            "  -h, --help    Print this help\n"
+            "  -p, --port    UDP port (default 8101)\n"
+            "  -i, --iface   Interface\n"
+            "  --server      Server mode\n"
+            "  -c, --client  Client mode\n\n";
+    printf(usage_text, "multicast");
+}
+
 static void parse_args(int argc, char **argv, struct args *args) {
     enum {
         OPT_SERVER = 'z' + 1,
@@ -36,8 +48,6 @@ static void parse_args(int argc, char **argv, struct args *args) {
         {"server", no_argument,       NULL, OPT_SERVER},
         {"client", no_argument,       NULL, 'c'},
     };
-
-    // todo: print usage
 
     int opt;
     while ((opt = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
@@ -125,9 +135,11 @@ static void parse_args(int argc, char **argv, struct args *args) {
             break;
         }
         case 'h': {
+            usage();
             exit(0);
         }
         default: {
+            usage();
             exit(1);
         }
         }
@@ -135,7 +147,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
 
     // validate options
     if (!(args->server ^ args->client)) {
-        fprintf(stderr, "invalid role specified (either server or client)\n");
+        fprintf(stderr, "mode not specified (either server or client)\n");
         exit(1);
     }
 
@@ -267,9 +279,8 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        char buf[RCV_BUF_SIZE];
-
         while (g_running) {
+            char buf[RCV_BUF_SIZE];
             err = recvfrom(fd, buf, RCV_BUF_SIZE, 0, NULL, 0);
             if (err < 0) {
                 err = errno;
