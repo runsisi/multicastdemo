@@ -29,23 +29,23 @@ static void usage() {
             "%s options address\n\n"
             "  -h, --help    Print this help\n"
             "  -p, --port    UDP port (default 8101)\n"
-            "  -i, --iface   Interface\n"
-            "  --server      Server mode\n"
-            "  -c, --client  Client mode\n\n";
+            "  --iface       Interface (either name or IP address)\n"
+            "  -s, --server  Running in server mode\n"
+            "  -c, --client  Running in client mode\n\n";
     printf(usage_text, "multicast");
 }
 
 static void parse_args(int argc, char **argv, struct args *args) {
     enum {
-        OPT_SERVER = 'z' + 1,
+        OPT_IFACE = 'z' + 1,
     };
 
-    char *short_opts = "hp:i:c";
+    char *short_opts = "hp:sc";
     struct option long_opts[] = {
         {"help",   no_argument,       NULL, 'h'},
         {"port",   required_argument, NULL, 'p'},
-        {"iface",  required_argument, NULL, 'i'},
-        {"server", no_argument,       NULL, OPT_SERVER},
+        {"iface",  required_argument, NULL, OPT_IFACE},
+        {"server", no_argument,       NULL, 's'},
         {"client", no_argument,       NULL, 'c'},
     };
 
@@ -61,7 +61,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
             args->port = htons(port);
             break;
         }
-        case 'i': {
+        case OPT_IFACE: {
             struct in_addr in_addr;
             if (inet_aton(optarg, &in_addr) != 0) {
                 // get interface index by addr
@@ -126,7 +126,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
 #endif
             break;
         }
-        case OPT_SERVER: {
+        case 's': {
             args->server = 1;
             break;
         }
@@ -147,22 +147,25 @@ static void parse_args(int argc, char **argv, struct args *args) {
 
     // validate options
     if (!(args->server ^ args->client)) {
-        fprintf(stderr, "mode not specified (either server or client)\n");
+        fprintf(stderr, "mode not specified or invalid (either server or client)\n");
+        usage();
         exit(1);
     }
 
     if (args->ifindex == 0) {
         fprintf(stderr, "either interface name or address must be specified\n");
+        usage();
         exit(1);
     }
 
     if (argc != optind + 1) {
         fprintf(stderr, "missing positional argument for multicast group address\n");
+        usage();
         exit(1);
     }
 
     // handle positional args
-    struct in_addr addr;
+    struct in_addr addr;    // multicast group address
     if (inet_aton(argv[optind++], &addr) == 0) {
         fprintf(stderr, "malformed multicast address: %s\n", optarg);
         exit(1);
@@ -246,8 +249,8 @@ int main(int argc, char **argv) {
     };
 #else
     struct ip_mreqn iface = {
-        .imr_multiaddr.s_addr = args.addr.s_addr,
-        // .imr_ifindex has high priority than .imr_address
+        .imr_multiaddr.s_addr = args.addr.s_addr,   // multicast group address
+        // .imr_ifindex has high priority than .imr_address which is the local IP address of interface
         .imr_ifindex = args.ifindex,
     };
 #endif
