@@ -21,6 +21,7 @@ struct args {
     unsigned ifindex;       // interface for multicast
     int server;
     int client;
+    int pause;
 };
 
 static void usage() {
@@ -29,24 +30,26 @@ static void usage() {
             "%s options address\n\n"
             "  -h, --help    Print this help\n"
             "  -p, --port    UDP port (default 8101)\n"
-            "  --iface       Interface (either name or IP address)\n"
+            "  -i, --iface   Interface (either name or IP address)\n"
             "  -s, --server  Running in server mode\n"
-            "  -c, --client  Running in client mode\n\n";
+            "  -c, --client  Running in client mode\n"
+            "  --pause       Pause after send (client mode only)\n\n";
     printf(usage_text, "multicast");
 }
 
 static void parse_args(int argc, char **argv, struct args *args) {
     enum {
-        OPT_IFACE = 'z' + 1,
+        OPT_PAUSE = 'z' + 1,
     };
 
-    char *short_opts = "hp:sc";
+    char *short_opts = "hp:i:sc";
     struct option long_opts[] = {
         {"help",   no_argument,       NULL, 'h'},
         {"port",   required_argument, NULL, 'p'},
-        {"iface",  required_argument, NULL, OPT_IFACE},
+        {"iface",  required_argument, NULL, 'i'},
         {"server", no_argument,       NULL, 's'},
         {"client", no_argument,       NULL, 'c'},
+        {"pause", no_argument,        NULL, OPT_PAUSE},
     };
 
     int opt;
@@ -61,7 +64,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
             args->port = htons(port);
             break;
         }
-        case OPT_IFACE: {
+        case 'i': {
             struct in_addr in_addr;
             if (inet_aton(optarg, &in_addr) != 0) {
                 // get interface index by addr
@@ -132,6 +135,10 @@ static void parse_args(int argc, char **argv, struct args *args) {
         }
         case 'c': {
             args->client = 1;
+            break;
+        }
+        case OPT_PAUSE: {
+            args->pause = 1;
             break;
         }
         case 'h': {
@@ -307,6 +314,8 @@ int main(int argc, char **argv) {
         err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF,
                          &iface.imr_interface.s_addr, sizeof(iface.imr_interface.s_addr));
 #else
+        // local address, i.e., .imr_address not specified, only .imr_ifindex used for
+        // routing, i.e., source address selection
         err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface));
 #endif
         if (err < 0) {
@@ -320,6 +329,11 @@ int main(int argc, char **argv) {
         if (err < 0) {
             err = errno;
             fprintf(stderr, "socket recv failed: %s\n", strerror(err));
+        }
+
+        if (args.pause) {
+            printf("Press enter to exit..");
+            getchar();
         }
     }
 
