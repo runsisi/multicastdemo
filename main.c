@@ -12,29 +12,38 @@
 #include <signal.h>
 #include <unistd.h>
 
-#define MULTICAST_PORT 8101
+#define PORT 8101
 #define RCV_BUF_SIZE (64 << 10)
+
+enum {
+    UCAST = 1,      // unicast
+    MCAST,          // multicast
+    BCAST,          // broadcast
+};
 
 struct args {
     struct in_addr addr;    // multicast group
     int port;               // multicast port
     unsigned ifindex;       // interface for multicast
+    char ifname[IFNAMSIZ];  // interface name to bind
     int server;
     int client;
+    int mode;               // u: unicast, m: multicast, b: broadcast
     int pause;
 };
 
 static void usage() {
     const char *usage_text =
-            "UDP multicast demo.\n\n"
+            "UDP uni/multi/broadcast demo.\n\n"
             "%s options address\n\n"
             "  -h, --help    Print this help\n"
             "  -p, --port    UDP port (default 8101)\n"
             "  -i, --iface   Interface (either name or IP address)\n"
             "  -s, --server  Running in server mode\n"
             "  -c, --client  Running in client mode\n"
+            "  -m, --mode    Running mode (u: unicast/m: multicast/b: broadcast)\n"
             "  --pause       Pause after send (client mode only)\n\n";
-    printf(usage_text, "multicast");
+    printf(usage_text, "cast");
 }
 
 static void parse_args(int argc, char **argv, struct args *args) {
@@ -42,14 +51,15 @@ static void parse_args(int argc, char **argv, struct args *args) {
         OPT_PAUSE = 'z' + 1,
     };
 
-    char *short_opts = "hp:i:sc";
+    char *short_opts = "hp:i:scm:";
     struct option long_opts[] = {
         {"help",   no_argument,       NULL, 'h'},
         {"port",   required_argument, NULL, 'p'},
         {"iface",  required_argument, NULL, 'i'},
         {"server", no_argument,       NULL, 's'},
         {"client", no_argument,       NULL, 'c'},
-        {"pause", no_argument,        NULL, OPT_PAUSE},
+        {"mode",   required_argument, NULL, 'm'},
+        {"pause",  no_argument,        NULL, OPT_PAUSE},
     };
 
     int opt;
@@ -101,6 +111,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
                     }
 
                     args->ifindex = ifa_index;
+                    strcpy(args->ifname, ifa->ifa_name);
 #endif
                     break;
                 }
@@ -125,6 +136,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
                 }
 
                 args->ifindex = idx;
+                strcpy(args->ifname, optarg);
             }
 #endif
             break;
@@ -136,6 +148,18 @@ static void parse_args(int argc, char **argv, struct args *args) {
         case 'c': {
             args->client = 1;
             break;
+        }
+        case 'm': {
+            if (!strcmp("u", optarg)) {
+                args->mode = UCAST;
+            } else if (!strcmp("m", optarg)) {
+                args->mode = MCAST;
+            } else if (!strcmp("b", optarg)) {
+                args->mode = BCAST;
+            } else {
+                fprintf(stderr, "invalid mode\n");
+                exit(1);
+            }
         }
         case OPT_PAUSE: {
             args->pause = 1;
@@ -154,34 +178,43 @@ static void parse_args(int argc, char **argv, struct args *args) {
 
     // validate options
     if (!(args->server ^ args->client)) {
-        fprintf(stderr, "mode not specified or invalid (either server or client)\n");
+        fprintf(stderr, "server / client mode not specified or invalid\n");
         usage();
         exit(1);
     }
 
     if (args->ifindex == 0) {
-        fprintf(stderr, "either interface name or address must be specified\n");
+        fprintf(stderr, "interface name / address not specified\n");
         usage();
         exit(1);
     }
 
-    if (argc != optind + 1) {
-        fprintf(stderr, "missing positional argument for multicast group address\n");
+    if (args->mode == 0) {
+        fprintf(stderr, "running mode not specified\n");
+        exit(1);
+    }
+
+    if (args->mode != BCAST && argc != optind + 1) {
+        fprintf(stderr, "missing target address\n");
         usage();
         exit(1);
     }
 
     // handle positional args
-    struct in_addr addr;    // multicast group address
-    if (inet_aton(argv[optind++], &addr) == 0) {
-        fprintf(stderr, "malformed multicast address: %s\n", optarg);
-        exit(1);
+    if (args->mode != BCAST) {
+        struct in_addr addr;    // target address
+        if (inet_aton(argv[optind++], &addr) == 0) {
+            fprintf(stderr, "malformed target address: %s\n", optarg);
+            exit(1);
+        }
+        args->addr.s_addr = addr.s_addr;
+    } else {
+        args->addr.s_addr = htonl(INADDR_BROADCAST);
     }
-    args->addr.s_addr = addr.s_addr;
 
     // handle default args
     if (args->port == 0) {
-        args->port = htons(MULTICAST_PORT);
+        args->port = htons(PORT);
     }
 }
 
@@ -248,40 +281,53 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // enable multicast for designated interface
-#ifdef _WIN32
-    struct ip_mreq iface = {
-        .imr_multiaddr.s_addr = args.addr.s_addr,
-        .imr_interface = htonl(args.ifindex),
-    };
-#else
-    struct ip_mreqn iface = {
-        .imr_multiaddr.s_addr = args.addr.s_addr,   // multicast group address
-        // .imr_ifindex has high priority than .imr_address which is the local IP address of interface
-        .imr_ifindex = args.ifindex,
-    };
-#endif
-    err = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &iface, sizeof(iface));
+    err = setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, args.ifname, strlen(args.ifname));
     if (err < 0) {
         err = errno;
-        fprintf(stderr, "set socket option \"IP_ADD_MEMBERSHIP\" failed: %s\n", strerror(err));
+        fprintf(stderr, "set socket option \"SO_BINDTODEVICE\" failed: %s\n", strerror(err));
         close(fd);
         return 1;
     }
 
-    struct sockaddr_in mc_addr = {
-        .sin_family = AF_INET,
+    if (args.mode == MCAST) {
+        // enable multicast for designated interface
 #ifdef _WIN32
-        // windows does not support bind to multicast address
-        .sin_addr = INADDR_ANY,
+        struct ip_mreq iface = {
+            .imr_multiaddr.s_addr = args.addr.s_addr,
+            .imr_interface = htonl(args.ifindex),
+        };
 #else
-        .sin_addr = args.addr,
+        struct ip_mreqn iface = {
+            .imr_multiaddr.s_addr = args.addr.s_addr,   // multicast group address
+            // .imr_ifindex has high priority than .imr_address which is the local IP address of interface,
+            // since we set .imr_ifindex here, so no need to set .imr_address
+            .imr_ifindex = args.ifindex,
+        };
 #endif
-        .sin_port = args.port,
-    };
+        err = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &iface, sizeof(iface));
+        if (err < 0) {
+            err = errno;
+            fprintf(stderr, "set socket option \"IP_ADD_MEMBERSHIP\" failed: %s\n", strerror(err));
+            close(fd);
+            return 1;
+        }
+    }
 
     if (args.server) {
-        err = bind(fd, (struct sockaddr *)&mc_addr, sizeof(mc_addr));
+        struct sockaddr_in baddr = {
+            .sin_family = AF_INET,
+#ifdef _WIN32
+            // windows does not support bind to multicast address
+            .sin_addr = htonl(INADDR_ANY),
+#else
+            .sin_addr = args.addr,
+#endif
+            .sin_port = args.port,
+        };
+
+        // do not bind to INADDR_ANY even if in bcast mode, since we don't want to receive
+        // all packets in bcast mode
+        err = bind(fd, (struct sockaddr *)&baddr, sizeof(baddr));
         if (err < 0) {
             err = errno;
             fprintf(stderr, "bind socket failed: %s", strerror(err));
@@ -309,26 +355,55 @@ int main(int argc, char **argv) {
     }
 
     if (args.client) {
-        // bind interface for sending
+        if (args.mode == MCAST) {
+            // bind interface for mcast sending
+            // use .imr_ifindex for routing, i.e., source address selection
+            struct ip_mreqn iface = {
+                .imr_ifindex = args.ifindex,
+            };
+
 #ifdef _WIN32
-        err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF,
-                         &iface.imr_interface.s_addr, sizeof(iface.imr_interface.s_addr));
+            err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF,
+                             &iface.imr_interface.s_addr, sizeof(iface.imr_interface.s_addr));
 #else
-        // local address, i.e., .imr_address not specified, only .imr_ifindex used for
-        // routing, i.e., source address selection
-        err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface));
+            // local address, i.e., .imr_address is not specified, so only .imr_ifindex is used for
+            // routing, i.e., source address selection
+            err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface));
 #endif
-        if (err < 0) {
-            err = errno;
-            fprintf(stderr, "set socket option \"IP_MULTICAST_IF\" failed: %s\n", strerror(err));
-            close(fd);
-            return 1;
+            if (err < 0) {
+                err = errno;
+                fprintf(stderr, "set socket option \"IP_MULTICAST_IF\" failed: %s\n", strerror(err));
+                close(fd);
+                return 1;
+            }
         }
 
-        err = sendto(fd, "Hello, world!", strlen("Hello, world!"), 0, (struct sockaddr *)&mc_addr, sizeof(mc_addr));
+        if (args.mode == BCAST) {
+            int opt_bcast = 1;
+            err = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &opt_bcast, sizeof(opt_bcast));
+            if (err < 0) {
+                err = errno;
+                fprintf(stderr, "set socket option \"SO_BROADCAST\" failed: %s\n", strerror(err));
+                close(fd);
+                return 1;
+            }
+        }
+
+        struct sockaddr_in taddr = {
+            .sin_family = AF_INET,
+#ifdef _WIN32
+            // windows does not support bind to multicast address
+            .sin_addr = INADDR_ANY,
+#else
+            .sin_addr = args.addr,
+#endif
+            .sin_port = args.port,
+        };
+
+        err = sendto(fd, "Hello, world!", strlen("Hello, world!"), 0, (struct sockaddr *)&taddr, sizeof(taddr));
         if (err < 0) {
             err = errno;
-            fprintf(stderr, "socket recv failed: %s\n", strerror(err));
+            fprintf(stderr, "socket sendto failed: %s\n", strerror(err));
         }
 
         if (args.pause) {
