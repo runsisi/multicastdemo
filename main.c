@@ -99,10 +99,6 @@ static void parse_args(int argc, char **argv, struct args *args) {
                         continue;
                     }
 
-#ifdef _WIN32
-                    struct ifaddrs_hwdata *ifa_data = (struct ifaddrs_hwdata *)ifa->ifa_data;
-                    args->ifindex = ifa_data->ifa_ifindex;
-#else
                     int ifa_index = if_nametoindex(ifa->ifa_name);
                     if (ifa_index == 0) {
                         err = errno;
@@ -112,7 +108,6 @@ static void parse_args(int argc, char **argv, struct args *args) {
 
                     args->ifindex = ifa_index;
                     strcpy(args->ifname, ifa->ifa_name);
-#endif
                     break;
                 }
 
@@ -122,12 +117,9 @@ static void parse_args(int argc, char **argv, struct args *args) {
                     fprintf(stderr, "address not found\n");
                     exit(1);
                 }
-            }
-#ifndef _WIN32
-            // interface name is useless under windows, do not use it!
-            // cygwin also has inconsistency here
-            // https://stackoverflow.com/questions/8978670/what-do-windows-interface-names-look-like
-            else {
+            } else {
+                // interface name is useless under windows, cygwin also has inconsistency here
+                // https://stackoverflow.com/questions/8978670/what-do-windows-interface-names-look-like
                 unsigned idx;
                 if ((idx = if_nametoindex(optarg)) == 0) {
                     int err = errno;
@@ -138,7 +130,6 @@ static void parse_args(int argc, char **argv, struct args *args) {
                 args->ifindex = idx;
                 strcpy(args->ifname, optarg);
             }
-#endif
             break;
         }
         case 's': {
@@ -291,19 +282,12 @@ int main(int argc, char **argv) {
 
     if (args.mode == MCAST) {
         // enable multicast for designated interface
-#ifdef _WIN32
-        struct ip_mreq iface = {
-            .imr_multiaddr.s_addr = args.addr.s_addr,
-            .imr_interface = htonl(args.ifindex),
-        };
-#else
         struct ip_mreqn iface = {
             .imr_multiaddr.s_addr = args.addr.s_addr,   // multicast group address
             // .imr_ifindex has high priority than .imr_address which is the local IP address of interface,
             // since we set .imr_ifindex here, so no need to set .imr_address
             .imr_ifindex = args.ifindex,
         };
-#endif
         err = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &iface, sizeof(iface));
         if (err < 0) {
             err = errno;
@@ -316,12 +300,7 @@ int main(int argc, char **argv) {
     if (args.server) {
         struct sockaddr_in baddr = {
             .sin_family = AF_INET,
-#ifdef _WIN32
-            // windows does not support bind to multicast address
-            .sin_addr = htonl(INADDR_ANY),
-#else
             .sin_addr = args.addr,
-#endif
             .sin_port = args.port,
         };
 
@@ -362,14 +341,9 @@ int main(int argc, char **argv) {
                 .imr_ifindex = args.ifindex,
             };
 
-#ifdef _WIN32
-            err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF,
-                             &iface.imr_interface.s_addr, sizeof(iface.imr_interface.s_addr));
-#else
             // local address, i.e., .imr_address is not specified, so only .imr_ifindex is used for
             // routing, i.e., source address selection
             err = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof(iface));
-#endif
             if (err < 0) {
                 err = errno;
                 fprintf(stderr, "set socket option \"IP_MULTICAST_IF\" failed: %s\n", strerror(err));
@@ -391,12 +365,7 @@ int main(int argc, char **argv) {
 
         struct sockaddr_in taddr = {
             .sin_family = AF_INET,
-#ifdef _WIN32
-            // windows does not support bind to multicast address
-            .sin_addr = INADDR_ANY,
-#else
             .sin_addr = args.addr,
-#endif
             .sin_port = args.port,
         };
 
