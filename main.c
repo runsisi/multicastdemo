@@ -151,6 +151,7 @@ static void parse_args(int argc, char **argv, struct args *args) {
                 fprintf(stderr, "invalid mode\n");
                 exit(1);
             }
+            break;
         }
         case OPT_PAUSE: {
             args->pause = 1;
